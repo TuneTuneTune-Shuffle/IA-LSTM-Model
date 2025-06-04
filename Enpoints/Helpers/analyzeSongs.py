@@ -10,3 +10,4 @@ def getSong():
 def songGenreAnalyzer(model,song):
     #Usamos el modelo para devolver el genero de una cancion
     return model(song)
+

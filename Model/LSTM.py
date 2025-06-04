@@ -9,6 +9,7 @@ from tensorflow import keras
 #import tensorflow_datasets as tfds
 import numpy as np
 from sklearn.model_selection import train_test_split
+from collections import Counter
 
 from davids_LabelMaker import getGenre
 
@@ -44,16 +45,18 @@ def predict_genre(model, mfcc, index_to_label):
     predicted_index = np.argmax(prediction, axis=1)[0]
     return index_to_label[predicted_index]
 
-
 #Funcion que agarra un numero de audios para luego convertirlos a MFCC (Mel-frequency cepstral coefficient)
 def audioMFCC(audio):
-  audio_series , sample_rate = librosa.load(audio,duration = 30.0,res_type="soxr_hq")
-  mfcc = librosa.feature.mfcc(y=audio_series, sr=sample_rate, n_mfcc=40).T
-  #np.ndarray [shape=(…, n_mfcc, t)]
-  return mfcc,audio_series
+    # print(f"Procesando audio: {audio}")
+    # print(f"Duración del audio: {librosa.get_duration(filename=audio)} segundos")
+    # print("Type de audio:", type(audio))
+    audio_series , sample_rate = librosa.load(audio,duration = 30.0,res_type="soxr_hq")
+    mfcc = librosa.feature.mfcc(y=audio_series, sr=sample_rate, n_mfcc=40)
+    #np.ndarray [shape=(…, n_mfcc, t)]
+    return mfcc,audio_series
 
 #Funcion que recorre las carpetas y devuelve un dataset con su labelset
-def readDataSet(ds_path,num=5000):
+def readDataSet(ds_path,num=100):
         labels_pd = getGenre()
         datasetMFCC = []
         labelsMFCC = []
@@ -61,8 +64,6 @@ def readDataSet(ds_path,num=5000):
 
         #Ordenamos nuestras carpetas
         chunck = sorted(os.listdir(ds_path))
-
-        print(f"chunck: {chunck}")
         
         for _, file in enumerate(chunck):
             if num_items > num:
@@ -93,26 +94,31 @@ def readDataSet(ds_path,num=5000):
                     labelsMFCC.append(label)
                     num_items+=1
                 except Exception as e:
+                    print(f"Error procesando {song_path}: {e}")
                     print(f"Error procesando {y}: {e}")
+                   
 
         return datasetMFCC, labelsMFCC
 
 #Padding
-def pad_mfcc(mfcc, max_len=1300):
-    if mfcc.shape[0] < max_len:
-        pad_width = max_len - mfcc.shape[0]
-        return np.pad(mfcc, ((0, pad_width), (0, 0)), mode='constant')
+def pad_mfcc(mfcc, max_len=100):
+    if mfcc.shape[1] < max_len:
+        pad_width = max_len - mfcc.shape[1]
+        return np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
     else:
-        return mfcc[:max_len]
+        return mfcc[:, :max_len]
+
             
 # Crear modelo
 def genreClassifier(input_shape,num_classes):
     model = tf.keras.Sequential([
         tf.keras.layers.Masking(mask_value=0.0, input_shape=input_shape),
-        tf.keras.layers.LSTM(64, return_sequences=True),
-        tf.keras.layers.LSTM(64),
-        tf.keras.layers.Dense(64, activation='relu'),
+        tf.keras.layers.LSTM(128, return_sequences=True),
         tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.LSTM(128),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dropout(0.4),
         tf.keras.layers.Dense(num_classes, activation='softmax')
     ])
     return model
@@ -162,22 +168,47 @@ def main():
 
     #Creamos nuestro dataSet y el labelSet
     dataSet , labelSet = readDataSet(ds_path)
-    print(len(dataSet))
-
-    # Guardamos el dataset original sin padding (opcional)
-    # save_mfcc_dataset(dataSet, labelSet, "./mfcc_data")
 
     # Crear el mapeo de etiquetas: género -> número
     unique_labels = sorted(set(labelSet))
+    print(f"Etiquetas únicas encontradas: {unique_labels}")
+    
+    #Recorremos las etiquetas y creamos un diccionario de mapeo el cual inidca conocer la canntidad de géneros
+    # y la cantidad de MFCC que tenemos
     label_to_index = {label: idx for idx, label in enumerate(unique_labels)}
-    index_to_label = {idx: label for label, idx in label_to_index.items()}  # opcional, para decodificar luego
+    print(f"Diccionario de etiquetas: {label_to_index}")
 
-    #Aplicar padding a todos
-    X = np.array([pad_mfcc(mfcc) for mfcc in dataSet])#, dtype=np.float32)
+    # index_to_label = {idx: label for label, idx in label_to_index.items()}  # opcional, para decodificar lueg
+    # #Aplicar padding a todos
+    #X = np.array([pad_mfcc(mfcc) for mfcc in dataSet])#, dtype=np.float32)
+    X = np.array([pad_mfcc(mfcc) for mfcc in dataSet])
+    print(X)
+   
     y = np.array([label_to_index[label] for label in labelSet])
+    print(y)
+
+    # Guardamos el dataset original sin padding (opcional)
+    save_mfcc_dataset(X, y, "./LSTM-SaveData&&Model")
+
     num_classes = len(label_to_index)  
+
+    #Imprimimos el primer mfcc del dataset
+    print("Cantidad de MFCC:", len(dataSet))
+    print("Cantidad de etiquetas:", len(labelSet))
+    print("Tamaño de un MFCC:", dataSet[0].shape)
+    plt.figure(figsize=(10, 5))
+    librosa.display.specshow(dataSet[0], x_axis='time')
+    plt.colorbar()
+    plt.title('MFCC')
+    plt.xlabel('Time')
+    plt.ylabel('MFCC Coefficients')
+    plt.show()
+
     # División 80% entrenamiento, 20% validación
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    print("Cantidad de géneros:", num_classes)
+    print("Cantidad de MFCC:", len(X))
+    print("Cantidad de etiquetas:", len(y))
 
     print("Cantidad de MFCC para entrenamiento:", len(X_train))
     print("Cantidad de MFCC para validación:", len(X_val))
@@ -198,12 +229,30 @@ def main():
 
     model.summary()
 
+    checkpoint_path = "./LSTM-SaveData&&Model/best_model.h5"
+    checkpoint_cb = tf.keras.callbacks.ModelCheckpoint(
+        checkpoint_path,
+        monitor='val_accuracy',
+        save_best_only=True,
+        save_weights_only=False,
+        verbose=1
+    )
+
+    early_stop_cb = tf.keras.callbacks.EarlyStopping(
+        monitor='val_accuracy',
+        patience=5,
+        restore_best_weights=True,
+        verbose=1
+    )
+
     history = model.fit(train_ds, validation_data=val_ds, epochs=30)
 
     test_loss, test_acc = model.evaluate(val_ds)
     print('Test accuracy:', test_acc)
 
-    model.save("genre_classifier_model.h5")
+    model.save("./LSTM-SaveData&&Model/genre_classifier_model.h5")
+
+    plot_history(history)
 
 if __name__ == "__main__":
     main()
